@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AC_Attention —— 基于解析延拓降维变换的注意力近似算法（数学推导）</title>
+<script>
+window.MathJax = {
+  tex: { inlineMath: [['$', '$'], ['\\(', '\\)']], displayMath: [['$$', '$$'], ['\\[', '\\]']] },
+  svg: { fontCache: 'global' }
+};
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js" id="MathJax-script" async></script>
+<style>
+  :root {
+    --ink: #1a2332; --muted: #5a6b80; --accent: #0f4c81; --accent2: #b3541e;
+    --line: #dde5ee; --bg: #ffffff; --soft: #f4f7fb; --code: #10243e;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0 16px 96px;
+    font-family: "Source Han Serif SC", "Noto Serif CJK SC", "Songti SC", Georgia, "Times New Roman", serif;
+    color: var(--ink); background: var(--bg); line-height: 1.75;
+  }
+  main { max-width: 900px; margin: 0 auto; }
+  header.cover {
+    border-bottom: 3px double var(--accent);
+    padding: 40px 8px 24px; margin-bottom: 8px;
+  }
+  h1 { font-size: 1.9em; margin: 0 0 6px; letter-spacing: .5px; }
+  .subtitle { color: var(--accent2); font-weight: 600; margin: 0 0 18px; font-size: 1.05em; }
+  .meta { color: var(--muted); font-size: .95em; }
+  .meta b { color: var(--ink); }
+  h2 {
+    font-size: 1.35em; margin: 44px 0 10px; padding: 6px 12px;
+    border-left: 6px solid var(--accent); background: var(--soft);
+  }
+  h3 { font-size: 1.1em; margin: 26px 0 8px; color: var(--accent); }
+  p, li { text-align: justify; }
+  .abstract {
+    background: var(--soft); border: 1px solid var(--line); border-radius: 8px;
+    padding: 14px 20px; margin: 20px 0;
+  }
+  .box {
+    border: 1px solid var(--line); border-left: 5px solid var(--accent2);
+    background: #fdf8f2; border-radius: 6px; padding: 10px 18px; margin: 16px 0;
+  }
+  .thm {
+    border: 1px solid var(--line); border-left: 5px solid var(--accent);
+    background: #f5f9fd; border-radius: 6px; padding: 10px 18px; margin: 16px 0;
+  }
+  .thm .tt { font-weight: 700; color: var(--accent); }
+  .note { color: var(--muted); font-size: .92em; }
+  table { border-collapse: collapse; margin: 14px auto; font-size: .95em; }
+  th, td { border: 1px solid var(--line); padding: 6px 14px; text-align: center; }
+  th { background: var(--soft); }
+  pre.code {
+    background: var(--code); color: #dbe7f5; border-radius: 8px;
+    padding: 14px 18px; overflow-x: auto; font-size: .88em; line-height: 1.6;
+    font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+  }
+  code { font-family: "Cascadia Code", Consolas, monospace; }
+  .refs { font-size: .88em; }
+  .refs li { margin-bottom: 6px; }
+  footer { margin-top: 56px; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: .9em; }
+  @media (max-width: 640px) { body { padding: 0 8px 64px; } h1 { font-size: 1.5em; } }
+</style>
+</head>
+<body>
+<main>
+
+<header class="cover">
+  <h1>AC_Attention：基于解析延拓降维变换的注意力近似算法</h1>
+  <p class="subtitle">Analytic-Continuation Attention —— 对 K、V 的层次矩压缩与单查询近 O(log n) 复杂度</p>
+  <p class="meta">
+    作者：<b>魏勇勤</b> ｜ 时间：<b>2026年8月30日</b><br>
+    配套文件：<code>readme.md</code>（调用方法）· <code>ac_attention.py</code>（参考实现，numpy）
+  </p>
+</header>
+
+<div class="abstract">
+  <p><b>摘要。</b>标准注意力机制需要对 $n$ 个查询与 $n$ 个键做 $n^2$ 次内积，其交互矩阵 $e^{QK^\top/\sqrt d}$ 的稠密性使复杂度为 $O(n^2 d)$。本文提出 <b>AC_Attention</b>：先把注意力算子嵌入复平面上的整函数族
+  $A(z)=D(z)^{-1}e^{zQK^\top/\sqrt d}V$，物理注意力为 $A(1)$；再利用解析延拓的核心事实——整函数由其在任意锚点处的 jet（泰勒喷流）唯一确定——把每个簇内 $e^{\langle q,k\rangle/\sqrt d}$ 展开为锚点处的多单项级数（<b>降维变换</b>），从而把 K 压缩为各簇的标量矩 $m_\alpha$、把 V 压缩为向量矩张量 $M_\alpha^V$；最后在 2-means 层次聚类树上按 HODLR 兄弟分解组织计算。在"对数受限 + 半径收缩"两个显式假设下，单查询摊还复杂度为
+  $O\big((C(d,P)+d)\,d_{\rm out}\log n\big)$、总复杂度 $O\big(n(C(d,P)+d)\,d_{\rm out}\log n\big)$，
+  其中 $C(d,P)=\binom{d+P}{P}$ 是 $d$ 元 $P$ 次单项式个数——在 $n$ 上接近 $O(\log n)$。误差按 $u^{P+1}/(P+1)!$ 几何衰减（$u=\|q\|\,r_C/\sqrt d$）。数值实验（$d{=}16$, $P{=}3$，单位范数 $Q,K$）显示与精确注意力逐行相对误差约 $3\times10^{-6}$，且查询阶段实测复杂度接近 $O(n\log n)$。</p>
+</div>
+
+<h2>1　记号与标准 Attention</h2>
+<p>设查询、键、值矩阵为 $Q,K,V$，其中 $Q,K\in\mathbb R^{n\times d}$（行向量记为 $q_i,k_j$），$V\in\mathbb R^{n\times d_{\rm out}}$（行向量 $v_j$）。缩放点积注意力为</p>
+<p>$$o_i = \sum_{j=1}^{n}\frac{e^{s_{ij}}}{\sum_{l=1}^{n}e^{s_{il}}}\,v_j, \qquad s_{ij}=\frac{\langle q_i,k_j\rangle}{\sqrt d}, \tag{1}$$</p>
+<p>其瓶颈是稠密交互矩阵 $K_0=\big(e^{s_{ij}}\big)_{i,j}\in\mathbb R^{n\times n}$：朴素计算需要 $O(n^2 d)$ 时间、$O(n^2)$ 次指数运算。本文的目标：以可控误差 $\varepsilon$ 换取一个在 $n$ 上接近 $O(\log n)$（单查询）的算法，同时对 K、V 进行显式压缩。</p>
+
+<h2>2　核心思想一：复化与解析延拓</h2>
+<p>对 $z\in\mathbb C$ 定义复化注意力算子族</p>
+<p>$$A(z)=D(z)^{-1}K(z)V,\qquad K(z)_{ij}=\exp\!\Big(z\,\frac{\langle q_i,k_j\rangle}{\sqrt d}\Big),\qquad D(z)=\operatorname{diag}\big(K(z)\mathbf 1_n\big), \tag{2}$$</p>
+<p>则物理注意力恰为 <b>$A(1)=\mathrm{Attention}(Q,K,V)$</b>。因为每个矩阵元 $K(z)_{ij}=e^{z s_{ij}}$ 都是 $z$ 的整函数，$A(z)$ 在 $\mathbb C$ 上解析（整）。由柯西积分公式，$z=1$ 处的值由任意包围 $1$ 的围道决定：</p>
+<p>$$A(1)=\frac{1}{2\pi i}\oint_{|z|=\rho>1}\frac{A(z)}{z-1}\,dz. \tag{3}$$</p>
+<p>在 $z=0$ 处展开，$A(z)=\sum_{p\ge 0}z^p A_p$，级数对一切 $z$ 收敛。$p$ 阶系数 $A_p$ 的分量恰是 <b>矩层级</b>：</p>
+<p>$$\big(K(z)V\big)_{i}=\sum_{j}e^{z s_{ij}}v_j=\sum_{p\ge 0}\frac{z^p}{p!}\sum_j s_{ij}^{\,p}\,v_j, \tag{4}$$</p>
+<p>即复平面上的延拓深度 $p$ 与"空间矩" $\sum_j s_{ij}^{p}v_j$ 一一对应。<b>解析延拓在此的数学角色</b>是：(i) 把 $O(n^2)$ 的稠密交互视为整函数 $A(z)$ 的一条纤维；(ii) 给出重构它的"延拓数据"——锚点处的 jet（矩）；(iii) 给出截断误差的复分析界（第 5 节）。</p>
+<div class="note">
+  <p><b>诚实注记（延拓是许可，不是引擎）。</b>直接对 (3) 做 $m$ 点围道求积并不能降低复杂度：每个节点上的 $A(z_j)$ 本身仍是稠密注意力。解析延拓在本算法中的作用是<em>形式许可</em>——它保证"锚点 jet + 层级求和"这一重构方案是合法的，并给出误差的解析界；真正的降复杂度引擎是第 3 节的锚点 jet 展开与第 4 节的层次分解。</p>
+</div>
+
+<h2>3　核心思想二：锚点 jet 展开（降维变换）与 K/V 压缩</h2>
+<h3>3.1　整函数由锚点 jet 唯一确定</h3>
+<p>取键的一个簇 $C\subseteq[n]$，其锚点（质心）$c_C=\frac{1}{|C|}\sum_{j\in C}k_j$，半径 $r_C=\max_{j\in C}\|k_j-c_C\|$。对 $k_j=c_C+\delta_j$，函数</p>
+<p>$$f(\delta)=e^{\langle q,\,c_C+\delta\rangle/\sqrt d}=e^{\langle q,c_C\rangle/\sqrt d}\,e^{\langle q,\delta\rangle/\sqrt d} \tag{5}$$</p>
+<p>是 $\delta\in\mathbb R^d$ 的整函数：它在 $\delta=0$ 处的 jet（各阶导数，即各阶矩）<b>在全部 $\mathbb R^d$ 上唯一确定 $f$</b>。这正是"解析延拓"的空间版本：<em>簇内任意点处的核值由锚点处的延拓数据重构</em>。</p>
+<h3>3.2　多单项展开与截断余项</h3>
+<p>令 $u=\langle q,\delta\rangle/\sqrt d$。由指数级数</p>
+<p>$$e^{\langle q,k_j\rangle/\sqrt d}=e^{\langle q,c_C\rangle/\sqrt d}\sum_{p=0}^{\infty}\frac{\big(\langle q,\delta_j\rangle/\sqrt d\big)^{p}}{p!}. \tag{6}$$</p>
+<p>用多重指标 $\alpha=(\alpha_1,\dots,\alpha_d)\in\mathbb N^d$，$|\alpha|=\sum_r\alpha_r$，$\alpha!=\prod_r\alpha_r!$，$x^\alpha=\prod_r x_r^{\alpha_r}$，多元展开给出</p>
+<p>$$\big(\langle q,\delta\rangle\big)^{p}=\sum_{|\alpha|=p}\frac{p!}{\alpha!}\,q^{\alpha}\,\delta^{\alpha}
+\;\Longrightarrow\;
+\frac{1}{p!}\Big(\frac{\langle q,\delta\rangle}{\sqrt d}\Big)^{p}
+=\sum_{|\alpha|=p}\frac{q^{\alpha}\,\delta^{\alpha}}{\alpha!\,d^{|\alpha|/2}}. \tag{7}$$</p>
+<div class="thm"><span class="tt">引理 1（截断余项）</span>　设 $|\langle q,\delta\rangle/\sqrt d|\le u=\|q\|\,r_C/\sqrt d$。则在 $P$ 阶截断下
+$$\Big|\,e^{\langle q,\delta\rangle/\sqrt d}-\sum_{p=0}^{P}\frac{\big(\langle q,\delta\rangle/\sqrt d\big)^p}{p!}\,\Big|
+\le e^{u}\,\frac{u^{P+1}}{(P+1)!}, \qquad \text{相对误差}\ \le \frac{u^{P+1}}{(P+1)!}. \tag{8}$$</div>
+<p><b>证明要点。</b>对 $u\ge 0$ 由拉格朗日余项 $e^u-\sum_{p\le P}u^p/p!=e^{\xi}u^{P+1}/(P+1)!$（$\xi\in[0,u]$）且 $e^\xi\le e^u$；相对误差即除以公共因子 $e^{\langle q,c_C\rangle/\sqrt d}$ 与 $e^u$。∎</p>
+<p>误差按 $1/(P+1)!$ 几何衰减——这是解析延拓（整函数）给出的超代数收敛，也是"降维变换"得以成立的根据。<b>控制参数是 $u=\|q\|\,r_C/\sqrt d$</b>：$u\ll 1$ 时小阶数即近似精确；$u\ge 1$ 时所需阶数 $P\approx e\,u$（第 8 节讨论）。</p>
+<h3>3.3　降维变换与 K/V 压缩</h3>
+<p>对簇 $C$ 的远场贡献，由 (6)(7) 得</p>
+<p>$$\sum_{j\in C}e^{s_{ij}}v_j=e^{\langle q_i,c_C\rangle/\sqrt d}\sum_{|\alpha|\le P}\frac{q_i^{\alpha}}{\alpha!\,d^{|\alpha|/2}}\;
+\underbrace{\sum_{j\in C}\delta_j^{\alpha}\,v_j}_{=:\,M_\alpha^{V}(C)}+R_C, \tag{9}$$</p>
+<div class="box">
+  <p><b>K/V 压缩（矩喷流 moment jets）。</b>每个簇 $C$ 只保存 $C(d,P)=\binom{d+P}{P}$ 个压缩量，与 $|C|$ 无关：</p>
+  <p>$$M_\alpha^{V}(C)=\sum_{j\in C}\delta_j^{\alpha}\,v_j\ \ (\text{V 压缩：向量矩}),\qquad
+  m_\alpha(C)=\sum_{j\in C}\delta_j^{\alpha}\ \ (\text{K 压缩：标量矩，供归一化项}). \tag{10}$$</p>
+  <p>其中 $\delta_j=k_j-c_C$。交互从 $|C|\times d$ 个自由度的"逐点稠密"变为 $C(d,P)$ 个自由度的"锚点喷流"——这就是本算法的<em>解析延拓降维变换</em>：$(q,k)\mapsto q^\alpha/(\alpha!\,d^{|\alpha|/2})$ 与 $\delta^\alpha$ 是秩 $C(d,P)$ 的核线性化特征映射，远小于簇的稠密交互秩。</p>
+</div>
+<p>注意 (9) 中公共因子 $e^{\langle q_i,c_C\rangle/\sqrt d}$ 与 $\alpha$ 无关：它说明一个查询与一个簇的相互作用由<b>锚点 logit</b> 与<b>喷流矩</b>完全确定。softmax 的归一化项 $\sum_j e^{s_{ij}}$ 用同样的公式、以 $v_j\equiv 1$ 代入（即 $m_\alpha(C)$）并行计算。</p>
+
+<h2>4　核心思想三：层次分解与 AC_Attention 算法</h2>
+<h3>4.1　HODLR 兄弟分解</h3>
+<p>对 K 建深度 $L=\lceil\log_2(n/s)\rceil$ 的二叉树（每层沿 2-means 分离方向做中位分裂，叶子容量 $s$，保证平衡）。对查询 $q_i$，沿最近质心下行，其根—叶路径把全部 token 划分成：</p>
+<p>$$[n]=L_i\ \dot\cup\ \bigcup_{\ell=0}^{L-1} S_\ell, \tag{11}$$</p>
+<p>其中 $L_i$ 是 $q_i$ 所在叶子（<b>精确计算</b>，$O(s)$），$S_\ell$ 是第 $\ell$ 层路径簇的<em>兄弟块</em>（<b>远场喷流近似</b>）。每个查询恰有 $L$ 个远场块——这是 $\log n$ 的来源。</p>
+<h3>4.2　算法</h3>
+<pre class="code">AC_Attention(Q, K, V, P, s, ε):
+  建树：K 上 2-means 方向 + 中位分裂 → 树 T，深度 L = ⌈log₂(n/s)⌉
+  压缩（离线，O(n·C(d,P)·d_out·L)）：
+      每个簇 C：锚点 c_C、半径 r_C、
+                P_C = 最小 p 使 u_C^{p+1}/(p+1)! ≤ ε（u_C = ‖q‖_max·r_C/√d，自适应）
+                矩喷流 { M_α^V(C), m_α(C) : |α| ≤ P_C }
+  查询（在线，O((C(d,P)+d)·d_out·L)）：
+      对每个 q_i：
+        (i) 路由：沿最近质心下行，收集 L 个兄弟块 S_ℓ 与叶子 L_i
+        (ii) 数值稳定位移：m_i = max( 叶子 logits ∪ {⟨q_i,c_ℓ⟩/√d}_ℓ )
+        (iii) num = Σ_ℓ e^{⟨q_i,c_ℓ⟩/√d − m_i} · Σ_{|α|≤P_ℓ} [q_i^α/(α! d^{|α|/2})] · M_α^V(S_ℓ)
+                     + Σ_{j∈L_i} e^{s_ij − m_i} v_j          （叶子精确）
+             den = 同式，以 m_α 代 M_α^V（即 V≡1 的矩）
+        (iv) o_i = num / den</pre>
+<p>查询侧的多单项特征 $q_i^\alpha$（$|\alpha|\le P$）每个查询只算一次，$O(C(d,P)\,d)$；喷流收缩是 $C(d,P)\times d_{\rm out}$ 的小矩阵乘。自回归增量模式：新 token 只影响 $O(L)$ 个路径簇的矩，摊还插入 $O(L\cdot C(d,P)\,d_{\rm out})$。</p>
+
+<h2>5　主定理：误差界</h2>
+<div class="thm"><span class="tt">定理 1（AC_Attention 误差）</span>　设<br>
+(A1) <em>对数受限</em>：$\max_{i,j}|s_{ij}|\le B$；<br>
+(A2) <em>半径收缩</em>：存在 $u^*&lt;1$，使一切远场块满足 $u_\ell=\|q_i\|\,r(S_\ell)/\sqrt d\le u^*$（单位范数 $Q,K$ 时 $u^*\le 2/\sqrt d$ 自动成立）。<br>
+以 $P$ 阶喷流近似远场、叶子精确计算，记 $\eta=\dfrac{(u^*)^{P+1}}{(P+1)!}$。则对每个查询
+$$\|\hat o_i-o_i\|\ \le\ \frac{2\eta}{1-\eta}\,\max_j\|v_j\|. \tag{12}$$</div>
+<p><b>证明要点。</b>对块 $S_\ell$，由引理 1 的<em>相对</em>界，其喷流近似满足 $\hat N_\ell=(1+\varepsilon_\ell)N_\ell$、$\hat D_\ell=(1+\varepsilon'_\ell)D_\ell$，$|\varepsilon_\ell|,|\varepsilon'_\ell|\le\eta$。softmax 输出是各块贡献的凸组合，扰动的标准分析给出
+$\|\hat o_i-o_i\|\le \frac{2\eta}{1-\eta}\cdot\frac{\|N_i\|_1}{D_i}$，而 $\|N_i\|_1/D_i=\sum_j e^{s_{ij}}\|v_j\|/\sum_j e^{s_{ij}}\le\max_j\|v_j\|$。∎</p>
+<p>误差随 $P$ 按 $1/(P+1)!$ 衰减，与 $n$ 无关。<b>推论：</b>取 $P=O\big(\log(1/\varepsilon)/\log(1/u^*)\big)$ 即可达误差 $\varepsilon$；$u^*\le 1/2$ 时 $P\le 5$ 已达 $\varepsilon\approx 10^{-5}$ 量级。</p>
+
+<h2>6　复杂度分析</h2>
+<div class="thm"><span class="tt">定理 2（AC_Attention 复杂度）</span>　设 $d,d_{\rm out},P$ 固定。则<br>
+· <b>单查询</b>：$O\big((C(d,P)+d)\,d_{\rm out}\log n\big)$；<br>
+· <b>总时间</b>：$O\big(n\,(C(d,P)+d)\,d_{\rm out}\log n\big)$；<br>
+· <b>压缩存储</b>：$O\big(n\,C(d,P)\,d_{\rm out}\log n\big)$ 最坏（每 token 出现在 $L$ 个簇的矩中；可按叶子分块降至 $O(n\,C(d,P)\,d_{\rm out})$ 因子级）。<br>
+其中 $C(d,P)=\binom{d+P}{P}=\dfrac{(d+P)!}{d!\,P!}$ 是 $d$ 元 $\le P$ 次单项式个数。</div>
+<p><b>证明要点。</b>查询侧：路由 $O(d\log n)$；每层一个兄弟块，喷流收缩 $O(C(d,P)\,d_{\rm out})$，共 $L=O(\log n)$ 层；叶子 $O(s(d+d_{\rm out}))=O(1)$。故单查询 $O((C(d,P)+d)\,d_{\rm out}\log n)$。压缩侧每簇 $O(|C|\,C(d,P)(d+d_{\rm out}))$，按层求和为 $O(n\,C(d,P)(d+d_{\rm out})\log n)$。∎</p>
+<p>与既有方法对比（$d,d_{\rm out},P$ 视为常数时，AC_Attention 在 $n$ 上为 $O(\log n)$/查询、$O(n\log n)$ 总量，<b>接近 $O(\log n)$</b>）：</p>
+<table>
+  <tr><th>方法</th><th>单查询</th><th>总复杂度</th><th>K/V 压缩</th></tr>
+  <tr><td>标准 Attention</td><td>$O(nd)$</td><td>$O(n^2d)$</td><td>无</td></tr>
+  <tr><td>线性 Attention / Performer</td><td>$O(md)$</td><td>$O(nmd)$</td><td>随机特征，$m$ 维</td></tr>
+  <tr><td>FMM / HODLR 型层次方法</td><td>$O(\log n)$</td><td>$O(n\log n)$</td><td>多极矩</td></tr>
+  <tr><td><b>AC_Attention（本文）</b></td><td><b>$O((C(d,P)+d)\,d_{\rm out}\log n)$</b></td><td><b>$O(n(C(d,P)+d)\,d_{\rm out}\log n)$</b></td><td><b>锚点喷流矩，$C(d,P)$ 个/簇</b></td></tr>
+</table>
+<p class="note">$C(d,P)$ 的量级：$d{=}16$ 时 $C{=}17\,(P{=}1),\ 153\,(P{=}2),\ 969\,(P{=}3)$；$d{=}64$ 时 $C{=}65\,(P{=}1),\ 2145\,(P{=}2)$。工程上按维度选 $P$：小 $d$ 取 $P{=}3$，大 $d$ 取 $P{=}2$。</p>
+
+<h2>7　实验验证（numpy 参考实现，2026-08-30）</h2>
+<p>以下为 <code>ac_attention.py</code> 的实测结果（Python 3.13 + numpy 2.3，CPU；误差为逐行相对误差 $\|\hat o_i-o_i\|/(\|o_i\|+10^{-9})$ 的均值/最大值；"scale" 表示 $Q,K$ 同时放大倍数，即对数幅度 $B\approx$ scale$^2/\sqrt d$）。</p>
+<h3>7.1　锚点 jet 恒等式：P 阶几何衰减</h3>
+<table>
+  <tr><th>截断阶 P</th><th>0</th><th>1</th><th>2</th><th>3</th><th>4</th></tr>
+  <tr><td>单簇相对误差</td><td>$2.8\times10^{-2}$</td><td>$9.0\times10^{-4}$</td><td>$2.4\times10^{-5}$</td><td>$3.1\times10^{-7}$</td><td>$1.2\times10^{-8}$</td></tr>
+</table>
+<p>误差逐阶缩小约 30 倍，与 $1/(P+1)!$ 的几何衰减预言一致（这里 $u\approx0.05$）。</p>
+<h3>7.2　全管道差分测试（AC vs 精确 Attention）</h3>
+<table>
+  <tr><th>n</th><th>d</th><th>scale</th><th>P</th><th>mean rel err</th><th>max rel err</th></tr>
+  <tr><td>256</td><td>16</td><td>1.0</td><td>3</td><td>$3.9\times10^{-6}$</td><td>$1.1\times10^{-5}$</td></tr>
+  <tr><td>1024</td><td>16</td><td>1.0</td><td>3</td><td>$3.2\times10^{-6}$</td><td>$6.1\times10^{-6}$</td></tr>
+  <tr><td>2048</td><td>16</td><td>1.0</td><td>3</td><td>$3.4\times10^{-6}$</td><td>$7.2\times10^{-6}$</td></tr>
+  <tr><td>1024</td><td>16</td><td>2.0</td><td>3</td><td>$8.8\times10^{-4}$</td><td>$1.8\times10^{-3}$</td></tr>
+  <tr><td>1024</td><td>16</td><td>4.0</td><td>3</td><td>$1.0\times10^{-1}$</td><td>$2.7\times10^{-1}$</td></tr>
+  <tr><td>1024</td><td>64</td><td>1.0</td><td>2</td><td>$2.4\times10^{-6}$</td><td>$3.6\times10^{-6}$</td></tr>
+  <tr><td>400（10 个紧致簇）</td><td>16</td><td>—</td><td>4</td><td>$9.5\times10^{-6}$</td><td>$5.5\times10^{-5}$</td></tr>
+</table>
+<p>单位范数（scale=1，即归一化后 $Q,K$ 的典型情形）下误差 $\sim10^{-6}$，且随 $n$ 稳定；$d$ 增大误差再降一个量级（$u^*\le2/\sqrt d$ 的体现）；scale=4（$B\approx16$）时误差升至 $10^{-1}$——与第 8 节"$B\gg1$ 需 $P\approx eB$"的预言一致，是<b>已知且可解释的退化域</b>。</p>
+<h3>7.3　复杂度标度计时（d=16, P=3, scale=1）</h3>
+<table>
+  <tr><th>n</th><th>t_build（压缩）</th><th>t_query（查询）</th><th>t_exact（$O(n^2)$）</th><th>查询阶段加速</th></tr>
+  <tr><td>512</td><td>0.63 s</td><td>0.10 s</td><td>0.003 s</td><td>—</td></tr>
+  <tr><td>1024</td><td>1.44 s</td><td>0.12 s</td><td>0.011 s</td><td>—</td></tr>
+  <tr><td>2048</td><td>3.12 s</td><td>0.20 s</td><td>0.043 s</td><td>—</td></tr>
+  <tr><td>4096</td><td>6.87 s</td><td>0.27 s</td><td>0.17 s</td><td>—</td></tr>
+  <tr><td>8192</td><td>15.1 s</td><td>0.57 s</td><td>0.68 s</td><td>1.2×</td></tr>
+  <tr><td>16384</td><td>32.1 s</td><td>1.19 s</td><td>2.75 s</td><td>2.3×</td></tr>
+</table>
+<p class="note">精确实现每倍增耗时约 4×（$n^2$）；AC_Attention 查询阶段每倍增约 1.7–2.1×（介于 $n$ 与 $n\log n$ 之间），与定理 2 一致。按实测拟合外推，查询阶段在 $n\approx2\times10^4$ 处反超精确实现，$n=6.5\times10^4$ 时预计约 7–8×。参考实现的常数因子来自 numpy 逐块调用开销；GPU/融合算子实现预计常数再降 2–3 个数量级。压缩阶段（t_build）$O(n\log n)$，可在 KV 缓存更新时增量维护。</p>
+
+<h2>8　讨论与局限</h2>
+<h3>8.1　何时 $u&lt;1$？——适用域的精确刻画</h3>
+<p>本方法的效率边界完全由 $u=\|q\|\,r_C/\sqrt d$ 刻画。</p>
+<ul>
+  <li><b>有利域</b>：归一化的 $Q,K$（LayerNorm/RoPE 之后的典型情形）给出 $u^*\le 2/\sqrt d$，$d\ge16$ 时 $u^*\le0.5$，$P=3$ 即可达 $\sim10^{-5}$——实测 $3\times10^{-6}$ 与此吻合。</li>
+  <li><b>自适应阶数</b>：每个簇按 $u_C$ 独立选 $P_C$（最小 $p$ 使 $u_C^{p+1}/(p+1)!\le\varepsilon$），深层小半径簇自动降阶。</li>
+  <li><b>退化域</b>：$B\gg1$（对数幅度大）时需 $P\approx e\,B$，$C(d,P)\sim P^{d}$ 快速增长；实测 scale=4（$B\approx16$）在 $P=3$ 下误差 $10^{-1}$。此时可换用更保守的聚类（更小的顶层半径）或增大 $P$，二者均被误差界覆盖。</li>
+</ul>
+<h3>8.2　与既有工作的关系</h3>
+<p>解析延拓—矩层级对应 FMM 的多极展开（Greengard–Rokhlin, 1987）与 HODLR/H-矩阵（Hackbusch, 1999）的谱思想；核线性化对应 Performer 的正随机特征恒等式 $e^{x\cdot y}=\mathbb E_\omega[e^{\omega\cdot x-\|x\|^2/2}e^{\omega\cdot y-\|y\|^2/2}]$（Choromanski et al., 2021）与线性注意力（Katharopoulos et al., 2020）；层次组织对应聚类注意力（Vyas et al., 2020）。AC_Attention 的增量在两点：(i) 用<em>复化族 $A(z)$ 的解析结构</em>统一"误差界—压缩量—复杂度"三者；(ii) 把 softmax 归一化项纳入同一喷流框架（$m_\alpha$），使相对误差以凸组合方式受控（定理 1）。</p>
+<h3>8.3　局限声明</h3>
+<ul>
+  <li>误差界依赖 (A1)(A2)；不满足时算法仍可运行，但误差按第 8.1 节规律上升，<b>不保证 $\varepsilon$</b>。</li>
+  <li>"接近 $O(\log n)$"指单查询摊还复杂度在 $n$ 上的阶；$d,P$ 固定，常数含 $C(d,P)\,d_{\rm out}$。</li>
+  <li>参考实现以正确性为先，常数因子未做工程优化；缓存友好的批量化查询见实现文件。</li>
+</ul>
+
+<h2>9　结论</h2>
+<p>本文提出 AC_Attention：以复化注意力族 $A(z)$ 的解析延拓为形式框架，以锚点 jet 展开为降维变换（$e^{\langle q,k\rangle/\sqrt d}$ 在每个簇上秩 $C(d,P)$ 化），以 2-means 层次树上的兄弟分解实现 $O(\log n)$ 深度查询，把 K、V 压缩为矩喷流 $\{m_\alpha, M_\alpha^V\}$。在 (A1)(A2) 下误差 $\le 2\eta/(1-\eta)\max\|v\|$（$\eta=(u^*)^{P+1}/(P+1)!$），单查询 $O((C(d,P)+d)\,d_{\rm out}\log n)$。数值实验（单位范数 $Q,K$，$P{=}3$）达到 $\sim10^{-6}$ 相对误差与 $O(n\log n)$ 实测标度。</p>
+
+<h2>参考文献</h2>
+<ol class="refs">
+  <li>A. Vaswani et al., <i>Attention Is All You Need</i>, NeurIPS 2017.</li>
+  <li>L. Greengard, V. Rokhlin, <i>A fast algorithm for particle simulations</i>, J. Comput. Phys. 73(2), 1987.</li>
+  <li>W. Hackbusch, <i>A sparse matrix arithmetic based on H-matrices</i>, Computing 62, 1999.</li>
+  <li>A. Katharopoulos et al., <i>Transformers are RNNs: Fast autoregressive transformers with linear attention</i>, ICML 2020.</li>
+  <li>K. Choromanski et al., <i>Rethinking attention with Performers</i>, ICLR 2021.</li>
+  <li>A. Vyas, A. Katharopoulos, F. Fleuret, <i>Fast transformers with clustered attention</i>, NeurIPS 2020.</li>
+  <li>L. N. Trefethen, <i>Approximation Theory and Approximation Practice</i>, SIAM 2013（复分析近似理论）.</li>
+</ol>
+
+<footer>
+  <p>作者：魏勇勤 ｜ 时间：2026年8月30日 ｜ 配套实现与调用方法见 <code>readme.md</code> 与 <code>ac_attention.py</code>。</p>
+  <p class="note">公式渲染依赖 MathJax（CDN）；离线阅读时数学式显示为原始 TeX 源码。</p>
+</footer>
+
+</main>
+</body>
+</html>

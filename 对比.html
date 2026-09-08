@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AC_Attention 与主流注意力机制对比：计算复杂度 · KV 压缩率 · 精度</title>
+<script>
+window.MathJax = {
+  tex: { inlineMath: [['$', '$'], ['\\(', '\\)']], displayMath: [['$$', '$$'], ['\\[', '\\]']] },
+  svg: { fontCache: 'global' }
+};
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js" id="MathJax-script" async></script>
+<style>
+  :root {
+    --ink: #1a2332; --muted: #5a6b80; --accent: #0f4c81; --accent2: #b3541e;
+    --line: #dde5ee; --bg: #ffffff; --soft: #f4f7fb; --good: #1e7a46; --bad: #b02318; --mid: #b3541e;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0 16px 96px;
+    font-family: "Source Han Serif SC", "Noto Serif CJK SC", "Songti SC", Georgia, "Times New Roman", serif;
+    color: var(--ink); background: var(--bg); line-height: 1.75;
+  }
+  main { max-width: 960px; margin: 0 auto; }
+  header.cover { border-bottom: 3px double var(--accent); padding: 40px 8px 24px; margin-bottom: 8px; }
+  h1 { font-size: 1.8em; margin: 0 0 6px; letter-spacing: .5px; }
+  .subtitle { color: var(--accent2); font-weight: 600; margin: 0 0 18px; font-size: 1.02em; }
+  .meta { color: var(--muted); font-size: .95em; }
+  .meta b { color: var(--ink); }
+  h2 { font-size: 1.3em; margin: 44px 0 10px; padding: 6px 12px; border-left: 6px solid var(--accent); background: var(--soft); }
+  h3 { font-size: 1.08em; margin: 24px 0 8px; color: var(--accent); }
+  p, li { text-align: justify; }
+  .abstract { background: var(--soft); border: 1px solid var(--line); border-radius: 8px; padding: 14px 20px; margin: 20px 0; }
+  .box { border: 1px solid var(--line); border-left: 5px solid var(--accent2); background: #fdf8f2; border-radius: 6px; padding: 10px 18px; margin: 16px 0; }
+  .note { color: var(--muted); font-size: .92em; }
+  table { border-collapse: collapse; margin: 14px auto; font-size: .92em; }
+  th, td { border: 1px solid var(--line); padding: 6px 12px; text-align: center; }
+  th { background: var(--soft); }
+  td.l { text-align: left; }
+  .ok { color: var(--good); font-weight: 600; }
+  .bad { color: var(--bad); font-weight: 600; }
+  .mid { color: var(--mid); font-weight: 600; }
+  .hl { background: #eef5fb; }
+  code { font-family: "Cascadia Code", Consolas, monospace; font-size: .9em; }
+  .refs { font-size: .88em; }
+  .refs li { margin-bottom: 6px; }
+  footer { margin-top: 56px; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: .9em; }
+  @media (max-width: 700px) { table { font-size: .8em; } th, td { padding: 4px 6px; } h1 { font-size: 1.4em; } }
+</style>
+</head>
+<body>
+<main>
+
+<header class="cover">
+  <h1>AC_Attention 与主流注意力机制对比</h1>
+  <p class="subtitle">计算复杂度 · KV 压缩率 · 精度 —— 同基准实测（单位范数 Q,K，numpy 参考实现）</p>
+  <p class="meta">
+    作者：<b>魏勇勤</b> ｜ 时间：<b>2026年8月30日</b> ｜ 配套：<code>AC_Attention.html</code>（数学推导）· <code>readme.md</code>（调用方法）· <code>ac_attention.py</code>（实现）
+  </p>
+</header>
+
+<div class="abstract">
+  <p><b>摘要。</b>本文在同一数据（单位范数 $Q,K\in\mathbb R^{n\times d}$，$d{=}16$，$n{=}1024,2048$）上，对<b>标准注意力、多头注意力、线性注意力（3 个变体）、稀疏注意力（top-k 与滑窗）、AC_Attention</b> 五类方法做三轴对比：计算复杂度（理论式 + 实测耗时）、KV 压缩率（存储口径 + 每查询访问口径）、精度（以标准注意力为参考的逐行相对误差）。主要结论：<b>(1)</b> 精度排序：标准 $=$ 多头（结构变体）$\approx$ AC（$10^{-6}\sim10^{-3}$，随 $P$ 可调）$\gg$ 线性（$10^{-4}\sim10^{-1}$）$\gg$ 稀疏（无局部性数据上相对误差 $2\sim6$）；<b>(2)</b> 总复杂度：线性 $O(n)$ 最优，AC $O(n\log n)$ 次之、查询阶段在 $n\approx2\times10^4$ 反超标准，稀疏在可 $O(1)$ 选择时 $O(nw)$，标准/多头 $O(n^2)$；<b>(3)</b> KV 压缩：线性注意力以<b>与 $n$ 无关的 $O(m)$ 状态</b>胜出（实测 113×→227× 且随 $n$ 增长），稀疏与标准、多头均无压缩（1×），AC_Attention 以按层矩存储换取 $O(\log n)$ 查询（$P{=}1$ 时存储 0.44×、每查询 KV 访问 14–28× 减少；存储-精度-访问三者的确切权衡见 §3 口径说明）。</p>
+</div>
+
+<h2>1　方法定义与公平口径</h2>
+<h3>1.1　对比对象</h3>
+<table>
+  <tr><th>方法</th><th class="l">本文采用的实现口径</th></tr>
+  <tr><td>标准注意力</td><td class="l">(1) 式缩放点积 softmax，$O(n^2d)$ 蛮力（numpy BLAS）；作为精度参考</td></tr>
+  <tr><td>多头注意力</td><td class="l">$h{=}4$ 头、每头 $d_h{=}4$ 维，无 QKV/输出投影（投影存在时是同一复杂度阶，精度由训练决定）</td></tr>
+  <tr><td>线性注意力</td><td class="l">核线性化 $e^{q\cdot k/\sqrt d}\approx\varphi(q)\cdot\varphi(k)$，$\varphi$ 取三个变体：① $1{+}\mathrm{elu}(x)$（$m{=}d{+}1$，工程常用）；② FAVOR 正随机特征（$m{=}128$，无偏）；③ 确定性多项式喷流特征（$m{=}C(d,2){=}153$，与 AC 同源、无层次）</td></tr>
+  <tr><td>稀疏注意力</td><td class="l">两个变体：top-$k$（$k{=}64,128$，每查询保留最大 $k$ 个 logit）与滑窗（$w{=}64,128$）；top-k 的选择代价计入时间</td></tr>
+  <tr><td class="hl">AC_Attention</td><td class="l">2-means 层次树 + 锚点喷流（$P{=}1,2,3$ 三档，自适应截断 $\varepsilon{=}10^{-3}$，叶子 $s{=}8$）；时间分"构建（喷流压缩）"与"查询"两段</td></tr>
+</table>
+<h3>1.2　公平口径声明</h3>
+<ul>
+  <li><b>同数据、同实现层</b>：全部为 numpy 参考实现，单位范数 $Q,K$（归一化后的典型情形），$V\sim\mathcal N(0,I)$；随机种子固定。</li>
+  <li><b>精度参考</b>：逐行相对误差 $\|\hat o_i-o_i\|/(\|o_i\|+10^{-9})$，参考为标准注意力。</li>
+  <li><b>多头注意力的精度列</b>：它是<em>结构扩展</em>而非近似方法——每头独立 softmax 归一化，即使无投影也与单头标准注意力输出不同（实测偏差 $6\times10^{-2}$，属结构差异而非误差）；有投影时其精度由训练决定，不作近似误差排序。表中以"—"标注。</li>
+  <li><b>稀疏注意力的精度</b>依赖数据局部性：本实验用均匀随机数据（无局部性），是稀疏方法的<em>压力场景</em>；真实语言数据上的误差会显著低于此。</li>
+  <li><b>AC 的构建与查询分列</b>：喷流压缩可在 KV 缓存更新时增量维护；查询阶段是逐 token 生成时的实际成本。</li>
+</ul>
+
+<h2>2　计算复杂度</h2>
+<h3>2.1　理论复杂度</h3>
+<p>令 $d_{\rm out}=d$，$h$ 为头数、$m$ 为线性特征维数、$k$ 为 top-k、$w$ 为窗口、$C=C(d,P)=\binom{d+P}{P}$：</p>
+<table>
+  <tr><th>方法</th><th>单查询（逐 token）</th><th>总时间</th></tr>
+  <tr><td>标准注意力</td><td>$O(nd)$</td><td>$O(n^2d)$</td></tr>
+  <tr><td>多头注意力（h 头）</td><td>$O(nd+d^2)$</td><td>$O(n^2d+nd^2)$</td></tr>
+  <tr><td>线性注意力（m 特征）</td><td>$O(m(d+d_{\rm out}))$（增量）</td><td>$O(nm(d+d_{\rm out}))$</td></tr>
+  <tr><td>稀疏 top-k</td><td>$O(nd+kd_{\rm out})$（选择＋聚合）</td><td>$O(n^2d+nkd_{\rm out})$（选择可用近似近邻降为 $O(nd\log n)$）</td></tr>
+  <tr><td>稀疏滑窗（w）</td><td>$O(w(d+d_{\rm out}))$</td><td>$O(nw(d+d_{\rm out}))$</td></tr>
+  <tr><td class="hl">AC_Attention（P 阶）</td><td class="hl">$O((C(d,P)+d)\,d_{\rm out}\log n)$</td><td class="hl">$O(n(C(d,P)+d)\,d_{\rm out}\log n)$</td></tr>
+</table>
+<h3>2.2　实测耗时（numpy 参考实现，d=16）</h3>
+<table>
+  <tr><th>方法</th><th>n=1024</th><th>n=2048</th><th>标度（实测）</th></tr>
+  <tr><td>标准注意力</td><td>0.011 s</td><td>0.043 s</td><td>$\approx n^2$（4×/倍增）</td></tr>
+  <tr><td>多头注意力（h=4）</td><td>0.154 s</td><td>0.616 s</td><td>$\approx n^2$</td></tr>
+  <tr><td>线性 elu（m=17）</td><td>0.001 s</td><td>0.002 s</td><td>$\approx n$</td></tr>
+  <tr><td>线性 FAVOR（m=128）</td><td>0.004 s</td><td>0.030 s</td><td>$\approx n$</td></tr>
+  <tr><td>线性多项式（m=153）</td><td>0.042 s</td><td>0.088 s</td><td>$\approx n$</td></tr>
+  <tr><td>稀疏 top-64 / top-128</td><td>0.022 s</td><td>0.062 / 0.066 s</td><td>$\approx n^2$（含朴素选择）</td></tr>
+  <tr><td>稀疏滑窗 w=64 / w=128</td><td>0.008 / 0.009 s</td><td>0.015 / 0.017 s</td><td>$\approx n$</td></tr>
+  <tr class="hl"><td class="l">AC P=1（构建＋查询）</td><td>0.047 + 0.008 s</td><td>0.118 + 0.017 s</td><td>$\approx n\log n$</td></tr>
+  <tr class="hl"><td class="l">AC P=2（构建＋查询）</td><td>0.227 + 0.013 s</td><td>0.499 + 0.028 s</td><td>$\approx n\log n$</td></tr>
+  <tr class="hl"><td class="l">AC P=3（构建＋查询）</td><td>1.412 + 0.109 s</td><td>3.038 + 0.148 s</td><td>$\approx n\log n$</td></tr>
+</table>
+<p class="note">渐近结论：线性与滑窗稀疏为 $O(n)$，实测最省；AC 查询阶段每倍增仅 1.1–2.1×（$n\log n$），在 $n\approx2\times10^4$ 处反超标准（$n{=}16384$ 时已快 2.3×，见主推导 §7.3）；标准与多头按 $n^2$ 增长。参考实现的常数因子来自 numpy 逐块调用，GPU/融合实现各方法常数均会大幅下降，渐近排序不变。</p>
+
+<h2>3　KV 压缩率</h2>
+<h3>3.1　两个口径</h3>
+<p>KV 缓存的"压缩"有两层含义，本文分别报告：</p>
+<ul>
+  <li><b>存储口径</b>：压缩率 $=$ 原始 KV 元素数 $n(d+d_{\rm out})$ $/$ 压缩状态元素数；$&gt;1$ 为压缩，$&lt;1$ 为膨胀。</li>
+  <li><b>访问口径</b>：单次查询实际触碰的 KV 状态元素数（决定逐 token 生成的带宽与延迟）。</li>
+</ul>
+<h3>3.2　实测压缩率（n=1024, d=16）</h3>
+<table>
+  <tr><th>方法</th><th>KV 状态元素数</th><th>存储口径压缩率</th><th>每查询 KV 访问</th><th>访问口径压缩率</th></tr>
+  <tr><td>标准注意力</td><td>$2nd=32768$</td><td>1×</td><td>32768</td><td>1×</td></tr>
+  <tr><td>多头注意力（h=4）</td><td>32768</td><td>1×</td><td>32768</td><td>1×</td></tr>
+  <tr><td>线性 elu（m=17）</td><td>$m(d{+}1)=289$</td><td class="ok">113×（n=2048 时 227×，随 n 增长）</td><td>289</td><td class="ok">113×</td></tr>
+  <tr><td>线性 FAVOR（m=128）</td><td>2176</td><td class="ok">15×（随 n 增长）</td><td>2176</td><td class="ok">15×</td></tr>
+  <tr><td>线性多项式（m=153）</td><td>2601</td><td class="ok">12.6×（随 n 增长）</td><td>2601</td><td class="ok">12.6×</td></tr>
+  <tr><td>稀疏 top-64 / 128</td><td>32768</td><td>1×（无压缩）</td><td>≈2k / 4k</td><td class="ok">16× / 8×</td></tr>
+  <tr><td>稀疏滑窗 w=64 / 128</td><td>32768（仅存窗口则 $\frac{w}{n}$=0.06/0.12）</td><td>1×</td><td>≈2k / 4k</td><td class="ok">16× / 8×</td></tr>
+  <tr class="hl"><td class="l">AC P=1</td><td>73695</td><td class="mid">0.44×（2.2× 膨胀）</td><td>$L\cdot C(d,1)(d{+}1)=2312$</td><td class="ok">14×</td></tr>
+  <tr class="hl"><td class="l">AC P=2</td><td>663255</td><td class="mid">0.049×（20× 膨胀）</td><td>20808</td><td class="ok">1.6×</td></tr>
+  <tr class="hl"><td class="l">AC P=3</td><td>4200615</td><td class="bad">0.0078×（128× 膨胀）</td><td>131784</td><td class="bad">0.25×</td></tr>
+</table>
+<div class="box">
+  <p><b>AC_Attention 压缩口径的诚实说明。</b>AC 的"压缩"是<em>交互秩压缩与查询访问压缩</em>，不是 KV 字节压缩：每个远场块把 $|C|\times d$ 的逐点交互压成 $C(d,P)$ 个矩；代价是参考实现按层全量存矩（每 token 出现在 $L$ 个簇中），存储口径为 $2d/(L\cdot C(d,P)(d{+}1))$ 倍——$P{=}1$ 时 0.44×、$P{=}3$ 时 0.0078×。<b>可用"叶子级存储 + 查询时二项式移位展开父喷流"将存储降为 $O(n\,C(d,P)(d_{\rm out}{+}1)/s)$</b>（$P{=}1$ 时 ≈1.1× 原始，$P{=}2$ 时 ≈10×），代价是查询侧每块多 $O(C(d,P)^2)$ 移位。访问口径才是 AC 的收益轴：每查询只触碰 $L\cdot C(d,P)(d_{\rm out}{+}1)$ 个状态元素，$P{=}1$ 时减少 14–28×，且随 $n/\log n$ 增长。三轴权衡：<b>线性注意力以精度换 $n$ 无关状态；稀疏以精度换常数访问（依赖数据局部性）；AC 以存储换精度与 $O(\log n)$ 查询。</b></p>
+</div>
+
+<h2>4　精度（同基准实测，参考 = 标准注意力）</h2>
+<table>
+  <tr><th>方法</th><th>n=1024：mean / max</th><th>n=2048：mean / max</th><th>误差来源（理论）</th></tr>
+  <tr><td>标准注意力</td><td>0（参考）</td><td>0（参考）</td><td>—</td></tr>
+  <tr><td>多头注意力（h=4）</td><td>$6.6\times10^{-2}$ / $1.0\times10^{-1}$（结构差）</td><td>$5.9\times10^{-2}$ / $9.3\times10^{-2}$</td><td>—（结构变体，非近似误差）</td></tr>
+  <tr><td>线性 elu（m=17）</td><td class="bad">$1.6\times10^{-1}$ / $2.4\times10^{-1}$</td><td class="bad">$1.4\times10^{-1}$ / $2.3\times10^{-1}$</td><td>固定特征核近似，无一致误差界</td></tr>
+  <tr><td>线性 FAVOR（m=128）</td><td class="bad">$2.7\times10^{-1}$ / $6.0\times10^{-1}$</td><td class="bad">$2.5\times10^{-1}$ / $8.1\times10^{-1}$</td><td>无偏但方差 $O(1/m)$，分母估计引入偏差</td></tr>
+  <tr><td>线性多项式（m=153）</td><td class="mid">$1.4\times10^{-4}$ / $2.3\times10^{-4}$</td><td class="mid">$1.2\times10^{-4}$ / $2.2\times10^{-4}$</td><td>$u^{P+1}/(P+1)!$ 全局界（无层次，$u$ 为全局半径）</td></tr>
+  <tr><td>稀疏 top-64 / top-128</td><td class="bad">$3.8$ / $2.6$（max 6.3 / 3.9）</td><td class="bad">$5.1$ / $3.5$</td><td>丢弃权重质量 $\gg$ 保留质量（均匀数据无局部性）</td></tr>
+  <tr><td>稀疏滑窗 w=64 / w=128</td><td class="bad">$3.8$ / $2.6$</td><td class="bad">$5.0$ / $3.6$</td><td>同上（压力场景；真实语言数据误差显著更低）</td></tr>
+  <tr class="hl"><td class="l">AC P=1</td><td class="mid">$2.2\times10^{-3}$ / $3.8\times10^{-3}$</td><td class="mid">$2.1\times10^{-3}$ / $3.4\times10^{-3}$</td><td>$2\eta/(1{-}\eta)\max\|v\|$，$\eta=(u^*)^2/2$</td></tr>
+  <tr class="hl"><td class="l">AC P=2</td><td class="ok">$1.2\times10^{-4}$ / $2.0\times10^{-4}$</td><td class="ok">$1.1\times10^{-4}$ / $1.9\times10^{-4}$</td><td>$\eta=(u^*)^3/6$</td></tr>
+  <tr class="hl"><td class="l">AC P=3</td><td class="ok">$3.6\times10^{-6}$ / $7.3\times10^{-6}$</td><td class="ok">$3.4\times10^{-6}$ / $7.0\times10^{-6}$</td><td>$\eta=(u^*)^4/24$，随 $n$ 稳定</td></tr>
+</table>
+<p class="note">要点：(1) 精度是 AC 的可调旋钮（$P{=}1\to3$ 精度提升约 $10^3$，代价是 $C(d,P)$ 与存储）；(2) 线性注意力各变体精度差距大，多项式喷流特征（与 AC 同源）在无层次时即达 $10^{-4}$——层次分解的作用是在同等 $P$ 下把误差再降约 $2$ 个数量级（$10^{-4}\to10^{-6}$），因为层次树把全局半径 $u$ 换成逐层递减的 $u_\ell$；(3) 稀疏注意力在本压力场景下相对误差 $2\sim6$，其有效性完全依赖数据局部性。</p>
+
+<h2>5　三轴总评与选型建议</h2>
+<table>
+  <tr><th>方法</th><th>总复杂度</th><th>精度</th><th>KV 存储压缩</th><th>KV 访问</th><th>适合场景</th></tr>
+  <tr><td>标准注意力</td><td class="bad">$O(n^2d)$</td><td class="ok">参考</td><td class="bad">1×</td><td class="bad">$O(n)$</td><td>短序列、精度基准</td></tr>
+  <tr><td>多头注意力</td><td class="bad">$O(n^2d+nd^2)$</td><td class="ok">结构扩展（非近似）</td><td class="bad">1×</td><td class="bad">$O(n)$</td><td>表达能力优先（训练模型）</td></tr>
+  <tr><td>线性注意力</td><td class="ok">$O(nm(d+d_{\rm out}))$</td><td class="mid">$10^{-4}\sim10^{-1}$</td><td class="ok">$O(m)$ 状态，n 无关</td><td class="ok">$O(m)$</td><td>超长序列、内存受限、增量推理</td></tr>
+  <tr><td>稀疏注意力</td><td class="mid">$O(nw(d+d_{\rm out}))$（选择 $O(1)$ 时）</td><td class="mid">数据相关（无局部性时差）</td><td class="bad">1×（窗口缓存 $w/n$）</td><td class="ok">$O(w)$</td><td>强局部性数据（代码/基因组等）</td></tr>
+  <tr class="hl"><td class="l">AC_Attention</td><td class="ok">$O(n(C+d)d_{\rm out}\log n)$</td><td class="ok">$10^{-6}\sim10^{-3}$（P 可调，有显式误差界）</td><td class="mid">按层矩 0.44×/0.049×/0.0078×（叶子级方案 ≈1.1×/10×）</td><td class="ok">$O(\log n)$</td><td class="l">长序列 + 精度有界要求；$n\gtrsim10^4$ 渐近占优</td></tr>
+</table>
+<p><b>结论。</b>不存在三轴全优的方法：线性注意力以精度换 $n$ 无关状态（KV 压缩率最强者）；稀疏注意力以精度换常数访问但依赖数据局部性；AC_Attention 以存储换取<em>有显式误差界的</em>精度与 $O(\log n)$ 查询——其相对定位是"有界近似的层次注意力"：$P$ 是精度旋钮，$C(d,P)$ 与存储是其代价，$n\to\infty$ 时是五者中唯一同时具备 $O(n\log n)$ 总复杂度与 $\sim10^{-6}$ 精度的方案。</p>
+
+<h2>6　附注与局限</h2>
+<ul>
+  <li>全部计时为 numpy 参考实现（CPU、单线程语义），仅用于确认复杂度标度；生产常数因子不具代表性。</li>
+  <li>多头注意力带可训练投影时，精度由其训练决定，且理论上可逼近标准注意力之上限；表中"—"仅表示不作近似误差比较。</li>
+  <li>稀疏注意力的精度强烈依赖数据局部性；均匀随机数据是无局部性的压力场景，结果不代表其在真实结构化数据上的表现。</li>
+  <li>AC 的存储口径按"每层全量矩"实现测得；§3.2 的叶子级 + 移位方案可将存储降至 $O(n\,C(d,P)(d_{\rm out}{+}1)/s)$（未在本参考实现中启用）。</li>
+  <li>线性 FAVOR 变体为无偏估计，误差随 $m$ 增大按 $O(1/\sqrt m)$ 下降；本文固定 $m{=}128$ 作代表性取值。</li>
+</ul>
+
+<h2>参考文献</h2>
+<ol class="refs">
+  <li>A. Vaswani et al., <i>Attention Is All You Need</i>, NeurIPS 2017.（标准/多头注意力）</li>
+  <li>A. Katharopoulos et al., <i>Transformers are RNNs</i>, ICML 2020.（线性注意力）</li>
+  <li>K. Choromanski et al., <i>Rethinking attention with Performers</i>, ICLR 2021.（FAVOR 正随机特征）</li>
+  <li>R. Child et al., <i>Generating long sequences with sparse transformers</i>, 2019.（稀疏注意力）</li>
+  <li>I. Beltagy, M. Peters, A. Cohan, <i>Longformer: The long-document transformer</i>, 2020.（滑窗 + 全局稀疏）</li>
+  <li>魏勇勤, <i>AC_Attention：基于解析延拓降维变换的注意力近似算法</i>, 2026年8月30日.（本文方法；数学推导见 <code>AC_Attention.html</code>）</li>
+</ol>
+
+<footer>
+  <p>作者：魏勇勤 ｜ 时间：2026年8月30日 ｜ 同基准实验脚本为一次性验证（numpy 2.3）；方法实现见 <code>ac_attention.py</code>。</p>
+  <p class="note">公式渲染依赖 MathJax（CDN）；离线阅读时数学式显示为原始 TeX 源码。</p>
+</footer>
+
+</main>
+</body>
+</html>
