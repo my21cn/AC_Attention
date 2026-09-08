@@ -7,7 +7,7 @@
 > 作者：**魏勇勤** ｜ 时间：**2026年8月30日**
 > 完整数学推导（定理、证明、误差界）：见 <code>AC_Attention.html</code>
 > 参考实现：<code>ac_attention.py</code>（numpy，正确性优先）
-> 仓库地址：<a href="https://github.com/my21cn/AC_Attention">GitHub（公开）</a> ｜ <a href="https://gitee.com/weiyongqin/AC_Attention">Gitee（私有，可自行改为公开）</a>
+> 仓库地址：<a href="https://github.com/my21cn/AC_Attention">GitHub（公开）</a> ｜ <a href="https://gitee.com/weiyongqin/AC_Attention">Gitee（公开）</a>
 
 ---
 
